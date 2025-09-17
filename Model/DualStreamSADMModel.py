@@ -1,28 +1,27 @@
-# File: sadm_dualstream_model.py
+# File: DualStreamSADMModel.py
 """
-Dual-stream architecture: Xception spatial backbone + FrequencyNet from file above +
-Bidirectional Channel Attention Fusion Module + classification head.
+Dual-stream model with explicit grayscale generation for the frequency stream.
+- Spatial stream: FullXception (RGB input)
+- Frequency stream: HybridWaveletFeatureExtractor (grayscale input)
+- Bidirectional attention + fusion + classification
 """
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torchvision.models import xception
+import cv2
+import numpy as np
+from typing import Tuple
 
-try:
-    from torchvision.models import xception as _xception_loader
-except Exception:
-    _xception_loader = None
+# Import your modules
+from Xception import FullXception  # rename the file before importing
+from HybridWaveletFeatureExtractor import HybridWaveletFeatureExtractor
 
 
 class BidirectionalChannelAttention(nn.Module):
-    """Implements the bidirectional channel attention described in this work.
-Given spatial features S (B, C, H, W) and frequency features F (B, C, H, W or B, C, 1, 1),
-compute channel vectors via GAP and generate cross-guided weights.
-    """
+    """Bidirectional Channel Attention Module"""
+
     def __init__(self, channels: int, hidden: int = 128):
         super().__init__()
-        # MLPs for cross-domain mapping
         self.mlp_S = nn.Sequential(
             nn.Linear(channels, hidden),
             nn.ReLU(inplace=True),
@@ -33,54 +32,33 @@ compute channel vectors via GAP and generate cross-guided weights.
             nn.ReLU(inplace=True),
             nn.Linear(hidden, channels)
         )
-        # small temperature to stabilize sigmoid
         self.sig = nn.Sigmoid()
 
     def forward(self, S: torch.Tensor, F: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # S: (B,C,H,W), F: (B,C,h,w) where h,w may be 1
         b, c, _, _ = S.shape
-        s_gap = F.adaptive_avg_pool2d(S, (1, 1)).view(b, c)
-        f_gap = F.adaptive_avg_pool2d(F, (1, 1)).view(b, c)
-        # cross mapping
-        alphaS = self.sig(self.mlp_S(f_gap))  # freq -> spatial weights
-        alphaF = self.sig(self.mlp_F(s_gap))  # spat -> freq weights
-        # reshape to (B,C,1,1)
-        alphaS_map = alphaS.view(b, c, 1, 1)
-        alphaF_map = alphaF.view(b, c, 1, 1)
-        S_mod = S * alphaS_map
-        F_mod = F * alphaF_map
+        s_gap = nn.functional.adaptive_avg_pool2d(S, (1, 1)).view(b, c)
+        f_gap = nn.functional.adaptive_avg_pool2d(F, (1, 1)).view(b, c)
+        alphaS = self.sig(self.mlp_S(f_gap))
+        alphaF = self.sig(self.mlp_F(s_gap))
+        S_mod = S * alphaS.view(b, c, 1, 1)
+        F_mod = F * alphaF.view(b, c, 1, 1)
         return S_mod, F_mod
 
 
 class DualStreamSADMModel(nn.Module):
     def __init__(self, feature_dim: int = 256, num_classes: int = 1, pretrained_spatial: bool = False):
         super().__init__()
-        # Spatial backbone (Xception). If not available, use a lightweight convnet.
-        if _xception_loader is not None:
-            # This call signature may differ depending on Xception implementation.
-            self.spatial = _xception_loader(pretrained=pretrained_spatial)
-            # remove final classifier, adapt to output feature map
-            if hasattr(self.spatial, 'fc'):
-                self.spatial.fc = nn.Identity()
-        else:
-            # fallback: small conv feature extractor
-            self.spatial = nn.Sequential(
-                nn.Conv2d(3, 64, 3, stride=2, padding=1),
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(64, feature_dim, 3, stride=2, padding=1),
-                nn.BatchNorm2d(feature_dim),
-                nn.ReLU(inplace=True)
-            )
+        # Spatial stream
+        self.spatial = FullXception(pretrained=pretrained_spatial, num_classes=feature_dim)
+        self.spatial.classifier = nn.Identity()  # Remove classification head
 
-        # Frequency net
-        from sadm_frequency_stream import FrequencyNet
-        self.freqnet = FrequencyNet(feature_dim=feature_dim)
+        # Frequency stream
+        self.freq_extractor = HybridWaveletFeatureExtractor(feature_dim=feature_dim)
 
-        # Bidirectional attention: channel dimension must match
+        # Bidirectional attention
         self.attention = BidirectionalChannelAttention(channels=feature_dim)
 
-        # Fusion and classification head
+        # Fusion + classifier
         self.fusion_conv = nn.Sequential(
             nn.Conv2d(feature_dim * 2, feature_dim, kernel_size=1),
             nn.BatchNorm2d(feature_dim),
@@ -90,54 +68,50 @@ class DualStreamSADMModel(nn.Module):
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
             nn.Linear(feature_dim, 128),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(128, num_classes)
         )
 
-    def forward(self, x_rgb: torch.Tensor, freq_feat_vec: torch.Tensor = None) -> torch.Tensor:
-        # x_rgb: (B,3,H,W)
-        # spatial forward: get a feature map of shape (B,C,Hs,Ws)
-        S = self._spatial_forward(x_rgb)
-        b, c, hs, ws = S.shape
-        # frequency forward: accept either a 317-dim vector (raw) or tensor outputs from freqnet
-        if freq_feat_vec is not None and freq_feat_vec.dim() == 2 and freq_feat_vec.shape[1] == 317:
-            freq_out = self.freqnet(freq_feat_vec)
-            F_map = freq_out['map']
-            # broadcast F_map to match spatial size
-            F_map = F_map.expand(-1, -1, hs, ws)
-        elif freq_feat_vec is not None and freq_feat_vec.dim() == 2 and freq_feat_vec.shape[1] == c:
-            # if user passed a vec already of size c
-            F_map = freq_feat_vec.view(b, c, 1, 1).expand(-1, -1, hs, ws)
-        else:
-            # If no frequency vector provided, initialize neutral map
-            F_map = torch.ones((b, c, hs, ws), device=S.device, dtype=S.dtype) * 0.5
+    def forward(self, x_rgb: torch.Tensor) -> torch.Tensor:
+        """
+        x_rgb: [B, 3, H, W], RGB images in range [0,1] float
+        """
+        B = x_rgb.size(0)
 
-        # Align channel numbers if necessary
-        if F_map.shape[1] != S.shape[1]:
-            # project to S channels
-            proj = nn.Conv2d(F_map.shape[1], S.shape[1], kernel_size=1).to(S.device)
-            F_map = proj(F_map)
+        # --- Spatial stream ---
+        S = self.spatial(x_rgb)
+        if S.dim() == 2:
+            S = S.unsqueeze(-1).unsqueeze(-1)  # [B, C] -> [B, C, 1, 1]
 
-        # apply bidirectional attention
+        # --- Frequency stream (explicit grayscale) ---
+        # Convert batch to numpy and grayscale
+        freq_feats = []
+        for i in range(B):
+            img_np = x_rgb[i].cpu().numpy().transpose(1, 2, 0)  # [H,W,C]
+            img_np = (img_np * 255).astype(np.uint8)
+            # Explicit grayscale
+            if img_np.ndim == 3 and img_np.shape[2] == 3:
+                img_gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+            else:
+                img_gray = img_np
+            feat = self.freq_extractor.extract_features(img_gray)
+            freq_feats.append(feat)
+
+        F_vec = torch.stack(freq_feats).to(x_rgb.device)
+        F_map = F_vec.unsqueeze(-1).unsqueeze(-1)  # [B,C,1,1]
+
+        # Expand F_map to match spatial feature map size
+        _, _, h, w = S.shape
+        F_map = F_map.expand(-1, -1, h, w)
+
+        # --- Bidirectional attention ---
         S_mod, F_mod = self.attention(S, F_map)
 
-        # concatenate and fuse
+        # --- Fusion ---
         fused = torch.cat([S_mod, F_mod], dim=1)
         fused = self.fusion_conv(fused)
 
+        # --- Classification ---
         logits = self.classifier(fused)
         return logits
-
-    def _spatial_forward(self, x: torch.Tensor) -> torch.Tensor:
-        # attempt to use spatial backbone to produce a feature map
-        try:
-            out = self.spatial(x)
-            # if backbone returned vector, reshape to (B,C,1,1)
-            if out.dim() == 2:
-                b, dim = out.shape
-                out = out.view(b, dim, 1, 1)
-            return out
-        except Exception:
-            # fallback: simple forwarding through fallback conv
-            return self.spatial(x)
