@@ -2,7 +2,6 @@
 """
 Dual-stream architecture: Xception spatial backbone + FrequencyNet from file above +
 Bidirectional Channel Attention Fusion Module + classification head.
-
 """
 
 import torch
@@ -17,9 +16,9 @@ except Exception:
 
 
 class BidirectionalChannelAttention(nn.Module):
-    """实现了本文所述的双向通道注意力。
-给定空间特征S（B，C，H，W）和频率特征F（B，C.H，W或B，C.1,1），
-通过GAP计算信道向量并产生交叉引导权重。
+    """Implements the bidirectional channel attention described in this work.
+Given spatial features S (B, C, H, W) and frequency features F (B, C, H, W or B, C, 1, 1),
+compute channel vectors via GAP and generate cross-guided weights.
     """
     def __init__(self, channels: int, hidden: int = 128):
         super().__init__()
@@ -142,5 +141,3 @@ class DualStreamSADMModel(nn.Module):
         except Exception:
             # fallback: simple forwarding through fallback conv
             return self.spatial(x)
-
-
