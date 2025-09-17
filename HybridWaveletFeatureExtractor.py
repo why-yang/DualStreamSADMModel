@@ -8,7 +8,8 @@ from skimage.feature import local_binary_pattern, hessian_matrix, hessian_matrix
 from scipy.fftpack import dct, fft2
 from scipy.signal import convolve2d
 from typing import Dict, Tuple, List
-# phasepack 可能不存在或返回签名不同，我们会做兼容包装
+
+# phasepack may be absent or return a different signature; provide a compatibility wrapper
 try:
     from phasepack import phasecong as _phasecong_raw
 except Exception:
@@ -22,33 +23,33 @@ warnings.filterwarnings("ignore", message="Applying `local_binary_pattern` to fl
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
-# ----------------- 工具函数：鲁棒处理数组/第三方签名 -----------------
+# ----------------- Utility functions: robust array / 3rd-party signature handling -----------------
 def ensure_2d(arr: np.ndarray) -> np.ndarray:
-    """把输入变成 2D 浮点数组（尽量不改变信息）"""
+    """Convert input to a 2D float array (without changing information if possible)."""
     a = np.asarray(arr)
     if a.ndim == 0:
         return a.reshape(1, 1).astype(np.float32)
     if a.ndim == 1:
         return a.reshape(1, -1).astype(np.float32)
     if a.ndim > 2:
-        # 多通道 -> 均值降为单通道
+        # Multi-channel -> average to single channel
         return np.mean(a, axis=2).astype(np.float32)
     return a.astype(np.float32)
 
 
 def safe_phasecong(image: np.ndarray, **kwargs) -> np.ndarray:
-    """兼容不同 phasecong 返回签名，若不可用返回全 0 矩阵"""
+    """Compatibility wrapper for different phasecong return signatures; return all-zero matrix if unavailable."""
     img = ensure_2d(image)
     if _phasecong_raw is None:
         return np.zeros_like(img)
     try:
         res = _phasecong_raw(img, **kwargs)
-        # 可能返回 (pc, EO, T, ph) 或只返回 pc，或 numpy array
+        # May return (pc, EO, T, ph) or only pc or a numpy array
         if isinstance(res, tuple) or isinstance(res, list):
             return np.asarray(res[0])
         return np.asarray(res)
     except Exception:
-        # 再试最简单调用
+        # Try the simplest call signature
         try:
             res = _phasecong_raw(img)
             if isinstance(res, (tuple, list)):
@@ -59,16 +60,16 @@ def safe_phasecong(image: np.ndarray, **kwargs) -> np.ndarray:
 
 
 def safe_hessian_eigvals(detail: np.ndarray):
-    """兼容 skimage.feature 的不同返回签名"""
+    """Compatibility wrapper for different return signatures of skimage.feature Hessian functions."""
     det = ensure_2d(detail)
     try:
         H_elems = hessian_matrix(det, sigma=1.0)
         try:
-            # 常见用法： hessian_matrix_eigvals(H_elems) 或 hessian_matrix_eigvals(*H_elems)
+            # Common use: hessian_matrix_eigvals(H_elems) or hessian_matrix_eigvals(*H_elems)
             eig = hessian_matrix_eigvals(H_elems)
         except Exception:
             eig = hessian_matrix_eigvals(*H_elems)
-        # eig 可能是 tuple (k1,k2) 或 ndarray shape (2,h,w)
+        # eig might be tuple (k1,k2) or ndarray shape (2,h,w)
         if isinstance(eig, tuple) or isinstance(eig, list):
             k1, k2 = eig[0], eig[1]
         else:
@@ -76,7 +77,7 @@ def safe_hessian_eigvals(detail: np.ndarray):
             if eig.ndim >= 3 and eig.shape[0] == 2:
                 k1, k2 = eig[0], eig[1]
             elif eig.ndim == 2:
-                # 不太常见的签名：直接两个通道并排的矩阵
+                # Less common signature: two channels concatenated in a 2D matrix
                 k1 = eig
                 k2 = np.zeros_like(k1)
             else:
@@ -84,11 +85,11 @@ def safe_hessian_eigvals(detail: np.ndarray):
                 k2 = np.zeros_like(det)
         return k1, k2
     except Exception:
-        # 失败则返回零矩阵
+        # On failure return zeros
         return np.zeros_like(det), np.zeros_like(det)
 
 
-# ----------------- 1. 68点区域定义与几何特征计算 -----------------
+# ----------------- 1. 68-point regions definition and geometric feature calculation -----------------
 class FaceGeometryAnalyzer:
     REGION_MAPPING = {
         "jaw": list(range(0, 17)),
@@ -107,14 +108,14 @@ class FaceGeometryAnalyzer:
         try:
             self.predictor = dlib.shape_predictor(predictor_path)
         except Exception as e:
-            # 若 predictor 文件不可用，仍然允许构造对象，但后续会抛异常
-            print(f"[Warning] 加载形状预测器失败: {e}")
+            # If predictor file is unavailable, allow construction but further calls will raise
+            print(f"[Warning] Failed to load shape predictor: {e}")
             self.predictor = None
         self.region_masks = None
 
     def get_landmarks(self, img_bgr: np.ndarray) -> np.ndarray:
         if self.predictor is None:
-            raise ValueError("shape_predictor_68_face_landmarks.dat 未能加载")
+            raise ValueError("shape_predictor_68_face_landmarks.dat failed to load")
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         faces = self.detector(gray, 1)
         if not faces:
@@ -160,11 +161,11 @@ class FaceGeometryAnalyzer:
 
         region_smoothness = {}
         h, w = gray_img.shape
-        # 频谱
+        # Spectrum
         try:
             f = np.abs(fft2(gray_img.astype(np.float32)))
         except Exception:
-            # 回退：使用简单的 Sobel 能量估计
+            # Fallback: simple Sobel energy estimate
             gx = cv2.Sobel(gray_img, cv2.CV_32F, 1, 0)
             gy = cv2.Sobel(gray_img, cv2.CV_32F, 0, 1)
             f = np.hypot(gx, gy)
@@ -178,7 +179,7 @@ class FaceGeometryAnalyzer:
                 region_smoothness[name] = 0.0
                 continue
 
-            # 把 mask 转成和频谱同 shape 的布尔/浮点 mask
+            # Convert mask to the same shape/type as the spectrum
             maskf = mask.astype(np.float32)
             low = np.sum(f * maskf * mask_center)
             high = np.sum(f * maskf * (1 - mask_center))
@@ -187,12 +188,12 @@ class FaceGeometryAnalyzer:
         return region_smoothness
 
 
-# ----------------- 2. 动态权重学习模块 -----------------
+# ----------------- 2. Dynamic weight learner -----------------
 class DynamicWeightLearner(nn.Module):
     def __init__(self, num_regions: int = 9):
         super().__init__()
         try:
-            # 保守默认张量类型设定（避免 string 形式导致某些环境异常）
+            # Conservative default tensor type setup (avoid string form causing issues in some environments)
             if not torch.cuda.is_available():
                 try:
                     torch.set_default_tensor_type(torch.FloatTensor)
@@ -202,7 +203,7 @@ class DynamicWeightLearner(nn.Module):
             self.wS = nn.Parameter(torch.ones(num_regions, dtype=torch.float32))
             self.wC = nn.Parameter(torch.ones(num_regions, dtype=torch.float32))
         except Exception as e:
-            print(f"[Warning] 参数初始化失败: {e}，使用备用初始化")
+            print(f"[Warning] Parameter initialization failed: {e}, using fallback initialization")
             self.wS = nn.Parameter(torch.tensor([1.0 for _ in range(num_regions)], dtype=torch.float32))
             self.wC = nn.Parameter(torch.tensor([1.0 for _ in range(num_regions)], dtype=torch.float32))
 
@@ -222,7 +223,7 @@ class DynamicWeightLearner(nn.Module):
         return region_weights
 
 
-# ----------------- 3. 混合小波张量分解 -----------------
+# ----------------- 3. Hybrid wavelet tensor decomposition -----------------
 class HybridWaveletTransformer:
     def __init__(self, levels=3):
         self.levels = levels
@@ -230,18 +231,18 @@ class HybridWaveletTransformer:
         self.haar_wavelet = 'haar'
 
     def _safe_wavedec2(self, img: np.ndarray, wavelet: str):
-        """尝试 pywt.wavedec2，失败时回退到简单金字塔近似以保证可运行性"""
+        """Try pywt.wavedec2; on failure fall back to a simple pyramid approximation to keep runnable."""
         img2 = ensure_2d(img)
         try:
             coeffs = pywt.wavedec2(img2, wavelet, level=self.levels)
             return coeffs
         except Exception as e:
-            # 回退：构造与 wavedec2 结构近似的列表
-            print(f"[Fallback] pywt.wavedec2({wavelet}) 失败: {e}；使用 pyrDown 回退实现")
+            # Fallback: construct a list approximating wavedec2 structure
+            print(f"[Fallback] pywt.wavedec2({wavelet}) failed: {e}; falling back to pyrDown implementation")
             coeffs = []
             ll = img2.copy()
             for _ in range(self.levels):
-                # 模拟低频近似
+                # Simulate low-frequency approximation
                 ll = cv2.pyrDown(ll)
             coeffs.append(ll)
             for _ in range(self.levels):
@@ -280,7 +281,7 @@ class HybridWaveletTransformer:
 
                 term1 = self._ensure_compatible_shapes(term1, term2)
 
-                # 初始化 weight_mask 为与 term1[0] 同 shape
+                # Initialize weight_mask to the same shape as term1[0]
                 base_shape = term1[0].shape
                 weight_mask = np.zeros(base_shape, dtype=np.float32)
 
@@ -289,16 +290,16 @@ class HybridWaveletTransformer:
                     if mask is None:
                         continue
                     mask_scaled = cv2.resize(mask.astype(np.float32), (base_shape[1], base_shape[0]), interpolation=cv2.INTER_NEAREST)
-                    # broadcast 如果需要
+                    # broadcast if needed
                     mask_scaled = ensure_2d(mask_scaled)
-                    # term1/term2 的每个通道可能是 2D 或 3D，主要按第0通道合并
+                    # term1/term2 each channel may be 2D or 3D; merge mainly on the 0th channel
                     contribution_0 = mask_scaled * (float(alpha.item()) * term1[0] + float(beta.item()) * term2[0])
-                    # 若 term1[0] 不是 base_shape（安全处理）
+                    # If contribution_0 is not the same shape as weight_mask (safety)
                     if contribution_0.shape != weight_mask.shape:
                         contribution_0 = cv2.resize(contribution_0, (weight_mask.shape[1], weight_mask.shape[0]), interpolation=cv2.INTER_AREA)
                     weight_mask += contribution_0
 
-                # 第二、三分量按通道加权（若存在）
+                # Second and third components weighted by channels if exist
                 ch1 = float(alpha.item()) * term1[1] + float(beta.item()) * term2[1]
                 ch2 = float(alpha.item()) * term1[2] + float(beta.item()) * term2[2]
 
@@ -309,20 +310,20 @@ class HybridWaveletTransformer:
                 )
                 mixed_coeffs.append(mixed_level)
             except Exception as e:
-                print(f"[Warning] 级别 {level} 分解失败: {e}，跳过该级别")
+                print(f"[Warning] Decomposition failed at level {level}: {e}, skipping this level")
                 continue
 
         return mixed_coeffs
 
     @staticmethod
     def _compute_tensor_product(x, y):
-        # x,y 预期为三元组 (LH, HL, HH) 或类似结构
+        # x,y expected to be triplets (LH, HL, HH) or similar
         try:
             a0 = ensure_2d(x[0])
             b0 = ensure_2d(y[0])
-            # 外积 -> 尽量产生可用 2D/3D 结果
+            # outer product -> try to produce usable 2D/3D result
             t0 = np.tensordot(a0, b0, axes=0)
-            # squeeze 可能把形状挤掉，改为 reshape 合理尺寸（若可能）
+            # squeeze may collapse shapes; attempt reasonable reshape if possible
             if t0.ndim >= 2:
                 t0 = t0.reshape(a0.shape[0], b0.shape[1] if b0.ndim > 1 else b0.shape[0])
         except Exception:
@@ -364,7 +365,7 @@ class HybridWaveletTransformer:
         try:
             return cv2.resize(tensor, (target_shape[1], target_shape[0]), interpolation=cv2.INTER_AREA)
         except Exception:
-            # 最保守填零
+            # Safest: fill zeros
             out = np.zeros(target_shape, dtype=tensor.dtype)
             h = min(tensor.shape[0], target_shape[0])
             w = min(tensor.shape[1], target_shape[1])
@@ -372,7 +373,7 @@ class HybridWaveletTransformer:
             return out
 
 
-# ----------------- 4. 三级特征提取器 -----------------
+# ----------------- 4. Three-level feature extractor -----------------
 class ThreeLevelFeatureExtractor:
     def __init__(self):
         self.lbp_n_points = 8
@@ -388,7 +389,7 @@ class ThreeLevelFeatureExtractor:
     def extract_level1(self, coeffs: List) -> np.ndarray:
         try:
             if len(coeffs) < 2:
-                raise ValueError("系数级别不足，无法提取Level 1特征")
+                raise ValueError("Not enough coefficient levels to extract Level 1 features")
 
             level1 = coeffs[1]
             if isinstance(level1, tuple) and len(level1) == 3:
@@ -407,7 +408,7 @@ class ThreeLevelFeatureExtractor:
                 kernel2 = np.atleast_2d(kernel.astype(np.float32))
                 filtered = convolve2d(hh1, kernel2, mode='same', boundary='symm')
                 filtered = filtered * (1 + weight_map)
-                # 避免常数图像导致 std=0
+                # Avoid std=0 for constant images
                 if np.max(filtered) - np.min(filtered) < 1e-8:
                     filtered_int = np.zeros_like(hh1_int)
                 else:
@@ -419,14 +420,14 @@ class ThreeLevelFeatureExtractor:
                     self.lbp_radius,
                     method=self.lbp_method
                 )
-                # 对 uniform 有 59 个 bin，若方法不同则尽量兼容
+                # 'uniform' has 59 bins; try to be compatible if method differs
                 bins = 59
                 hist, _ = np.histogram(lbp, bins=bins, range=(0, bins - 1))
                 features.append(hist.astype(np.float32))
 
             return np.concatenate(features) if features else np.zeros(0, dtype=np.float32)
         except Exception as e:
-            print(f"[Warning] Level 1特征提取失败: {e}，返回空特征")
+            print(f"[Warning] Level 1 feature extraction failed: {e}, returning empty feature")
             return np.zeros(4 * 59, dtype=np.float32)
 
     def extract_level2(self, coeffs: List) -> np.ndarray:
@@ -436,14 +437,14 @@ class ThreeLevelFeatureExtractor:
             else:
                 level_data = coeffs[1]
 
-            # 柔性解析
+            # Flexible parsing
             if isinstance(level_data, (list, tuple)):
                 if len(level_data) == 3:
                     lh2, hl2, hh2 = level_data[:3]
                 elif len(level_data) > 2 and isinstance(level_data[2], (list, tuple)):
                     lh2, hl2, hh2 = level_data[2][:3]
                 else:
-                    # 取前三个或复制
+                    # take first three or duplicate
                     parts = list(level_data) + [level_data[-1]] * 3
                     lh2, hl2, hh2 = parts[:3]
             else:
@@ -458,11 +459,11 @@ class ThreeLevelFeatureExtractor:
 
             kappa1, kappa2 = safe_hessian_eigvals(detail)
 
-            # 相位一致性（兼容不同签名）
+            # Phase congruency (compatible signatures)
             pc = safe_phasecong(detail, nscale=4, norient=6)
             weighted_curvature = ((kappa1 + kappa2) / 2.0) * pc
 
-            # 抽取统计量
+            # Extract statistics
             flat = weighted_curvature.flatten()
             flat = flat[~np.isnan(flat)]
             if flat.size == 0:
@@ -476,7 +477,7 @@ class ThreeLevelFeatureExtractor:
                 float(np.min(flat))
             ], dtype=np.float32)
         except Exception as e:
-            print(f"[Warning] Level 2特征提取失败: {e}，返回默认特征")
+            print(f"[Warning] Level 2 feature extraction failed: {e}, returning default features")
             return np.zeros(6, dtype=np.float32)
 
     def extract_level3(self, coeffs: List) -> np.ndarray:
@@ -484,7 +485,7 @@ class ThreeLevelFeatureExtractor:
             ll3 = coeffs[0]
             ll3 = ensure_2d(ll3)
 
-            # FFT 能量统计
+            # FFT energy statistics
             try:
                 fft_mag = np.abs(fft2(ll3))
             except Exception:
@@ -498,7 +499,7 @@ class ThreeLevelFeatureExtractor:
                 float(np.sum(fft_mag[:fft_mag.shape[0] // 4, :fft_mag.shape[1] // 4]))
             ]
 
-            # DCT 系数统计
+            # DCT coefficient statistics
             try:
                 dct_coef = dct(dct(ll3.T, norm='ortho').T, norm='ortho')
             except Exception:
@@ -513,7 +514,7 @@ class ThreeLevelFeatureExtractor:
 
             return np.array(fft_feat + dct_feat, dtype=np.float32)
         except Exception as e:
-            print(f"[Warning] Level 3特征提取失败: {e}，返回默认特征")
+            print(f"[Warning] Level 3 feature extraction failed: {e}, returning default features")
             return np.zeros(10, dtype=np.float32)
 
     def extract_cross_scale(self, coeffs: List) -> np.ndarray:
@@ -543,11 +544,11 @@ class ThreeLevelFeatureExtractor:
             )
             lbp_hist, _ = np.histogram(lbp_hh1.flatten(), bins=32, range=(0, 58))
 
-            # 跨尺度相关性（谨慎处理长度不足或 NaN）
+            # Cross-scale correlation (careful with short lengths or NaNs)
             try:
                 a = dct_ll3.flatten()
                 b = lbp_hh1.flatten()
-                # 截断为相同长度且非 NaN
+                # Truncate to same length and non-NaN
                 n = min(a.size, b.size, 1000)
                 if n < 2:
                     cross_corr = 0.0
@@ -565,11 +566,11 @@ class ThreeLevelFeatureExtractor:
 
             return np.concatenate([dct_hist.astype(np.float32), lbp_hist.astype(np.float32), np.array([cross_corr], dtype=np.float32)])
         except Exception as e:
-            print(f"[Warning] 跨尺度特征提取失败: {e}，返回默认特征")
+            print(f"[Warning] Cross-scale feature extraction failed: {e}, returning default features")
             return np.zeros(65, dtype=np.float32)
 
 
-# ----------------- 5. 特征提取器集成 -----------------
+# ----------------- 5. Feature extractor integration -----------------
 class HybridWaveletFeatureExtractor:
     def __init__(self, feature_dim=512, wavelet_levels=2):
         super().__init__()
@@ -578,7 +579,7 @@ class HybridWaveletFeatureExtractor:
         self.wavelet_transformer = HybridWaveletTransformer(levels=wavelet_levels)
         self.feature_extractor = ThreeLevelFeatureExtractor()
 
-        # 投影层：输入 317 -> projection
+        # Projection layer: input 317 -> projection
         self.projection = nn.Sequential(
             nn.Linear(317, 1024),
             nn.BatchNorm1d(1024),
@@ -588,7 +589,7 @@ class HybridWaveletFeatureExtractor:
         )
 
     def extract_features(self, img_bgr: np.ndarray) -> torch.Tensor:
-        # 1. 人脸几何分析
+        # 1. Face geometry analysis
         try:
             landmarks = self.geometry_analyzer.get_landmarks(img_bgr)
             gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -603,7 +604,7 @@ class HybridWaveletFeatureExtractor:
             region_weights = self.weight_learner(region_smoothness, region_curvature)
 
         except Exception as e:
-            print(f"[Warning] 几何分析失败: {e}，使用默认权重")
+            print(f"[Warning] Geometry analysis failed: {e}, using default weights")
             h, w = (gray.shape if 'gray' in locals() else (img_bgr.shape[0], img_bgr.shape[1]))
             region_weights = {
                 name: (torch.tensor(0.5), torch.tensor(0.5))
@@ -614,7 +615,7 @@ class HybridWaveletFeatureExtractor:
                 for name in self.geometry_analyzer.REGION_MAPPING.keys()
             }
 
-        # 2. 混合小波分解
+        # 2. Hybrid wavelet decomposition
         try:
             coeffs_x_coif, coeffs_x_haar, coeffs_y_coif, coeffs_y_haar = self.wavelet_transformer.decompose_separate(
                 gray)
@@ -624,12 +625,12 @@ class HybridWaveletFeatureExtractor:
                 region_weights, region_masks
             )
         except Exception as e:
-            print(f"[Warning] 小波分解失败: {e}，使用简化特征")
+            print(f"[Warning] Wavelet decomposition failed: {e}, using simplified features")
             h, w = gray.shape
-            mixed_coeffs = [np.zeros((h // 4 if h>=4 else 1, w // 4 if w>=4 else 1), dtype=np.float32)]
+            mixed_coeffs = [np.zeros((h // 4 if h >= 4 else 1, w // 4 if w >= 4 else 1), dtype=np.float32)]
             mixed_coeffs.append((np.zeros_like(mixed_coeffs[0]), np.zeros_like(mixed_coeffs[0]), np.zeros_like(mixed_coeffs[0])))
 
-        # 3. 多级特征提取
+        # 3. Multi-level feature extraction
         features = [
             self.feature_extractor.extract_level1(mixed_coeffs),
             self.feature_extractor.extract_level2(mixed_coeffs),
@@ -637,20 +638,20 @@ class HybridWaveletFeatureExtractor:
             self.feature_extractor.extract_cross_scale(mixed_coeffs)
         ]
 
-        # 确保特征维度正确（317）
+        # Ensure feature dimension is correct (317)
         try:
             features = np.concatenate([f.flatten() for f in features]).astype(np.float32)
             if len(features) != 317:
-                print(f"[Info] 特征维度不匹配: {len(features)}，调整为317维")
+                print(f"[Info] Feature dimension mismatch: {len(features)}, adjusting to 317")
                 if len(features) < 317:
                     features = np.pad(features, (0, 317 - len(features)), mode='constant')
                 else:
                     features = features[:317]
         except Exception as e:
-            print(f"[Warning] 特征拼接失败: {e}，使用默认特征向量")
+            print(f"[Warning] Feature concatenation failed: {e}, using default feature vector")
             features = np.zeros(317, dtype=np.float32)
 
-        # 4. 特征投影（稳健地处理 numpy/tensor）
+        # 4. Feature projection (robustly handle numpy/tensor)
         try:
             if isinstance(features, np.ndarray):
                 feat_tensor = torch.from_numpy(features).float().unsqueeze(0)
@@ -659,28 +660,28 @@ class HybridWaveletFeatureExtractor:
             projected = self.projection(feat_tensor)
             return projected.squeeze()
         except Exception as e:
-            print(f"[Warning] 特征投影失败: {e}，返回原始特征 tensor")
-            # 最后降级为直接返回一个 torch 张量（长度 317）
+            print(f"[Warning] Feature projection failed: {e}, returning raw feature tensor")
+            # Final fallback: return a torch tensor (length 317)
             try:
                 return torch.tensor(features, dtype=torch.float32)
             except Exception:
                 return torch.zeros(317, dtype=torch.float32)
 
 
-# ----------------- 6. 使用示例 -----------------
+# ----------------- 6. Usage example -----------------
 if __name__ == "__main__":
     try:
         extractor = HybridWaveletFeatureExtractor(wavelet_levels=1)
 
         img = cv2.imread("test_face.jpg")
         if img is None:
-            raise FileNotFoundError("未找到测试图像 'test_face.jpg'")
+            raise FileNotFoundError("Test image 'test_face.jpg' not found")
 
         with torch.no_grad():
             features = extractor.extract_features(img)
-            # features 可能是一维 tensor
+            # features may be a 1D tensor
             feat = features
-            # 如果是 torch tensor
+            # If it's a torch tensor
             if isinstance(feat, torch.Tensor):
                 f_np = feat.detach().cpu().numpy()
             else:
@@ -694,14 +695,14 @@ if __name__ == "__main__":
                   np.nanmin(f_np), np.nanpercentile(f_np, 1),
                   np.nanmedian(f_np), np.nanpercentile(f_np, 99), np.nanmax(f_np))
             print("L2 norm:", np.linalg.norm(np.nan_to_num(f_np)))
-            # 简单直方图（文本版）
+            # Simple text histogram
             hist, bins = np.histogram(np.nan_to_num(f_np), bins=10)
             print("hist bins:", bins)
             print("hist counts:", hist)
-            print(f"提取的特征向量形状: {tuple(features.shape) if hasattr(features, 'shape') else 'unknown'}")
+            print(f"Extracted feature vector shape: {tuple(features.shape) if hasattr(features, 'shape') else 'unknown'}")
             try:
-                print(f"特征向量范数: {torch.norm(features):.4f}")
+                print(f"Feature vector norm: {torch.norm(features):.4f}")
             except Exception:
-                print("无法计算范数（类型问题），已返回特征张量。")
+                print("Failed to compute norm (type issue); returned feature tensor.")
     except Exception as e:
-        print(f"主程序错误: {e}")
+        print(f"Main program error: {e}")
