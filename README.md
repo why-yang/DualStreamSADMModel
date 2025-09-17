@@ -13,18 +13,25 @@ We propose a Dual-Stream Attention Deepfake Detection Model (SADM) that integrat
 2. Spatial Stream: Xception backbone for spatial feature extraction.
 3. Dual-Stream Attention Fusion: A novel bidirectional attention mechanism that adaptively fuses spatial and frequency-domain features.
 
-This repo provides the core code modules for reproducibility of the algorithmic design.
-The full training pipeline (data loading, optimization, checkpoints) will be released in the camera-ready version.
+Minimal PyTorch implementation for deepfake detection. It couples a spatial stream (Xception or a lightweight CNN) with a frequency stream (Coiflet+Haar hybrid wavelets, region-adaptive weights, three-level features). The two streams are fused via bi-directional channel attention and trained with the SADM loss (classification + sensitivity contrast + channel regularization).
 
-Model implementation notes
+Key points
 
-DualStreamSADMModel.py
-This file contains the core dual-stream model implementation. The architecture implements two independent branches: a spatial stream that processes RGB images and a frequency stream that processes grayscale images. The spatial stream is based on an Xception backbone for RGB input; the frequency stream uses a hybrid wavelet transform to extract frequency features from the grayscale image (you must explicitly separate RGB and grayscale inputs — see the implementation notes below).
+Works with standard face images; outputs two logits/probabilities .
 
-DualStreamSADMModel_integrated.py
-An integrated, end-to-end demo pipeline. Starting from an RGB image, this script automatically derives a grayscale image and extracts the domain (frequency) features, demonstrating the full data flow and model behaviour. It is intended for validating the overall logic and is not a production deployment script.
+Optional facial landmark predictor (shape_predictor_68_face_landmarks.dat) improves masks; if absent, a stable grid fallback is used.
 
-Note: DualStreamSADMModel_integrated.py is provided for demonstration purposes only. For formal experiments and training runs, prefer using DualStreamSADMModel.py
+Two modes available: Strict (Kovesi phase congruency + LBP-10) and Legacy (Gabor approximation + LBP-59).
+
+If TIMM’s Xception is unavailable, the spatial stream automatically falls back to a light CNN.
+
+Notes
+
+Environment/setup instructions will be added in “Reminders”.
+
+Cite Kovesi (Phase Congruency), Ojala et al. (LBP), and Xception when using this work.
+
+
 ---
 
 
