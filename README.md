@@ -1,4 +1,4 @@
-# Dual-Stream Attention for Deepfake Detection
+# THE SELF-ADAPTIVE DYNAMIC MULTILEVEL WAVELET FOR DEEPFAKE DETECTION
 
 This repository contains the core implementation of the paper:
 
