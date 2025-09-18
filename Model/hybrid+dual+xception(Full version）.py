@@ -21,11 +21,11 @@ from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
-# ----------------- 设备配置 -----------------
+# ----------------- Device configuration -----------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# ----------------- 数据增强和预处理 -----------------
+# ----------------- Data augmentation & preprocessing -----------------
 train_transform = transforms.Compose([
     transforms.ToPILImage(),
     transforms.Resize((256, 256)),
@@ -44,7 +44,7 @@ val_transform = transforms.Compose([
 ])
 
 
-# ----------------- 数据集类 -----------------
+# ----------------- Dataset class -----------------
 class DeepFakeDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         self.root_dir = root_dir
@@ -58,7 +58,7 @@ class DeepFakeDataset(Dataset):
         print(f"Loaded {len(self.image_paths)} images from {root_dir}")
 
     def _load_images_recursive(self, current_dir):
-        """递归加载所有子文件夹中的图像"""
+        """Recursively load images from all subdirectories."""
         for item in os.listdir(current_dir):
             item_path = os.path.join(current_dir, item)
 
@@ -114,9 +114,9 @@ class DeepFakeDataset(Dataset):
         return image, label
 
 
-# ----------------- 工具函数 -----------------
+# ----------------- Utility functions -----------------
 def ensure_2d(arr: np.ndarray) -> np.ndarray:
-    """确保输入为2D浮点数组"""
+    """Ensure the input is a 2D float array."""
     a = np.asarray(arr)
     if a.ndim == 0:
         return a.reshape(1, 1).astype(np.float32)
@@ -128,13 +128,13 @@ def ensure_2d(arr: np.ndarray) -> np.ndarray:
 
 
 def safe_phasecong(image: np.ndarray, **kwargs) -> np.ndarray:
-    """相位一致性备选实现"""
+    """Phase congruency (fallback/placeholder implementation)."""
     img = ensure_2d(image)
     return np.zeros_like(img)
 
 
 def safe_hessian_eigvals(detail: np.ndarray):
-    """兼容skimage.feature的不同返回签名"""
+    """Compatibility wrapper for skimage.feature Hessian eigenvalues across versions."""
     det = ensure_2d(detail)
     try:
         H_elems = hessian_matrix(det, sigma=1.0)
@@ -160,7 +160,7 @@ def safe_hessian_eigvals(detail: np.ndarray):
         return np.zeros_like(det), np.zeros_like(det)
 
 
-# ----------------- 人脸几何分析器 -----------------
+# ----------------- Face geometry analyzer -----------------
 class FaceGeometryAnalyzer:
     REGION_MAPPING = {
         "jaw": list(range(0, 17)),
@@ -259,7 +259,7 @@ class FaceGeometryAnalyzer:
         return region_smoothness
 
 
-# ----------------- 动态权重学习器 -----------------
+# ----------------- Dynamic weight learner -----------------
 class DynamicWeightLearner(nn.Module):
     def __init__(self, num_regions: int = 9):
         super().__init__()
@@ -282,7 +282,7 @@ class DynamicWeightLearner(nn.Module):
         return region_weights
 
 
-# ----------------- 混合小波变换器 -----------------
+# ----------------- Hybrid wavelet transformer -----------------
 class HybridWaveletTransformer:
     def __init__(self, levels=3):
         self.levels = levels
@@ -414,7 +414,7 @@ class HybridWaveletTransformer:
             return out
 
 
-# ----------------- 三级特征提取器 -----------------
+# ----------------- Three-level feature extractor -----------------
 class ThreeLevelFeatureExtractor:
     def __init__(self):
         self.lbp_n_points = 8
@@ -581,7 +581,7 @@ class ThreeLevelFeatureExtractor:
             return np.zeros(65, dtype=np.float32)
 
 
-# ----------------- 混合小波特征提取器 -----------------
+# ----------------- Hybrid wavelet feature extractor -----------------
 class HybridWaveletFeatureExtractor(nn.Module):
     def __init__(self, feature_dim=512, wavelet_levels=3):
         super().__init__()
@@ -590,8 +590,8 @@ class HybridWaveletFeatureExtractor(nn.Module):
         self.wavelet_transformer = HybridWaveletTransformer(levels=wavelet_levels)
         self.feature_extractor = ThreeLevelFeatureExtractor()
 
-        # 特征维度计算
-        self.feature_dim = 4 * 59 + 6 + 10 + 65  # 317维
+        # Feature dimension calculation
+        self.feature_dim = 4 * 59 + 6 + 10 + 65  # 317 dims
 
         self.projection = nn.Sequential(
             nn.Linear(self.feature_dim, 1024),
@@ -651,7 +651,7 @@ class HybridWaveletFeatureExtractor(nn.Module):
         return self.projection(features_tensor)
 
 
-# ----------------- 双向通道注意力模块 -----------------
+# ----------------- Bidirectional channel attention -----------------
 class BidirectionalChannelAttention(nn.Module):
     def __init__(self, channels: int, reduction_ratio: int = 16):
         super().__init__()
@@ -674,7 +674,7 @@ class BidirectionalChannelAttention(nn.Module):
         return spatial_attended, freq_attended
 
 
-# ----------------- 完整的SADM模型 -----------------
+# ----------------- Full SADM model -----------------
 class SADMModel(nn.Module):
     def __init__(self, num_classes=2, feature_dim=256):
         super().__init__()
@@ -738,7 +738,7 @@ class SADMModel(nn.Module):
         return self.classifier(fused)
 
 
-# ----------------- 训练函数 -----------------
+# ----------------- Training loop -----------------
 def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=50, save_dir='./checkpoints'):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -821,7 +821,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, num_epoch
     return train_losses, val_losses, val_accuracies
 
 
-# ----------------- 测试函数 -----------------
+# ----------------- Test / evaluation -----------------
 def test_model(model, test_loader, model_path=None):
     if model_path:
         checkpoint = torch.load(model_path)
@@ -857,7 +857,7 @@ def test_model(model, test_loader, model_path=None):
     return all_preds, all_labels, all_probs
 
 
-# ----------------- 主函数 -----------------
+# ----------------- Main entry -----------------
 def main():
     # 数据路径
     train_dir = r"H:\xception\train"
