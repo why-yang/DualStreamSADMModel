@@ -18,7 +18,7 @@ import time
 import warnings
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-
+import timm
 warnings.filterwarnings("ignore")
 
 # ----------------- Device configuration -----------------
@@ -929,5 +929,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
