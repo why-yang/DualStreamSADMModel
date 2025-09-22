@@ -675,16 +675,21 @@ class BidirectionalChannelAttention(nn.Module):
 
 
 # ----------------- Full SADM model -----------------
+
 class SADMModel(nn.Module):
     def __init__(self, num_classes=2, feature_dim=256):
         super().__init__()
+
+        # -------------------------------
         # 空间流 (Xception)
+        # -------------------------------
         try:
-            from torchvision.models import xception
-            self.spatial_stream = xception(pretrained=True)
-            self.spatial_stream.fc = nn.Identity()
-            spatial_out_dim = 2048
-        except:
+            # 使用 timm 加载 Xception
+            self.spatial_stream = timm.create_model('xception', pretrained=True, num_classes=0)
+            spatial_out_dim = self.spatial_stream.num_features  # 自动获取，通常是 2048
+        except Exception as e:
+            print(f"Warning: Failed to load xception ({e}). Using fallback CNN.")
+            # Fallback: 简单CNN
             self.spatial_stream = nn.Sequential(
                 nn.Conv2d(3, 64, 3, padding=1),
                 nn.ReLU(),
@@ -924,4 +929,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
