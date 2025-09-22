@@ -889,7 +889,7 @@ def main():
         return
 
     # 创建数据加载器
-    batch_size = 8
+    batch_size = 1
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
@@ -915,7 +915,7 @@ def main():
     print("Starting training...")
     train_losses, val_losses, val_accuracies = train_model(
         model, train_loader, val_loader, criterion, optimizer,
-        num_epochs=30, save_dir='./checkpoints'
+        num_epochs=1, save_dir='./checkpoints'
     )
 
     # 测试模型
@@ -924,3 +924,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
